@@ -110,34 +110,28 @@ node --test test/model-sync.test.mjs
 - 旧目录 `.opencode/plugin/` 在本仓库里仍兼容，但不建议新项目继续使用
 - Node 版本是否 `>= 18`
 
-### 2) 我手工执行了 `npm install opencode-model-sync`，为什么没生效？
-
-- 仅安装 npm 包不会自动注册到 OpenCode
-- 需要通过 `opencode.json` 的 `plugin` 字段让 OpenCode 加载它
-- 或者把本地 shim 放到 `.opencode/plugins/`
-
-### 3) HTTP 401 / 403
+### 2) HTTP 401 / 403
 
 - 检查 `apiKey` 对应环境变量是否存在
 - 检查 `{env:XXX}` 拼写
 - 如果你已经在 OpenCode 里认证过 provider，确认对应凭据确实保存在 OpenCode 当前默认本地 `auth.json` 且类型是 `api`
 
-### 4) 出现 `/v1/v1/models` 或 `/v1models`
+### 3) 出现 `/v1/v1/models` 或 `/v1models`
 
 - 检查 `baseURL` 结尾斜杠
 - 检查 `endpoint` 开头斜杠
 - 插件已做标准化拼接，建议使用 `baseURL: https://host/v1` + `endpoint: /models`
 
-### 5) 返回格式不兼容
+### 4) 返回格式不兼容
 
 - 查看日志中错误信息
 - 扩展 `extractModelIds` 的字段映射逻辑（目前支持 `id/name/model`）
 
-### 6) 写入后模型选择器未刷新
+### 5) 写入后模型选择器未刷新
 
 - 必须重启 OpenCode（provider/models 在启动时加载）
 
-### 7) 备份越来越多
+### 6) 备份越来越多
 
 - 可定期清理 `backups/` 目录下的 `opencode.json.bak.*`
 
