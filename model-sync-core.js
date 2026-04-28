@@ -30,6 +30,7 @@ import { pathToFileURL } from 'node:url';
 const LOG_PREFIX = '[opencode-model-sync]';
 const DEFAULT_ENDPOINT = '/models';
 const DEFAULT_TIMEOUT_MS = 15000;
+const DEFAULT_SYNC_MODE = 'append';
 const DUPLICATE_LOAD_KEY = Symbol.for('opencode-model-sync.loaded');
 
 /**
@@ -117,9 +118,11 @@ export async function resolveConfigPath() {
 
   let cursor = process.cwd();
   for (;;) {
-    const candidate = path.join(cursor, 'opencode.json');
-    if (await fileExists(candidate)) {
-      return candidate;
+    for (const filename of ['opencode.json', 'opencode.jsonc']) {
+      const candidate = path.join(cursor, filename);
+      if (await fileExists(candidate)) {
+        return candidate;
+      }
     }
 
     const parent = path.dirname(cursor);
@@ -129,12 +132,137 @@ export async function resolveConfigPath() {
     cursor = parent;
   }
 
-  const globalConfig = path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
-  if (await fileExists(globalConfig)) {
-    return globalConfig;
+  for (const filename of ['opencode.json', 'opencode.jsonc']) {
+    const globalConfig = path.join(os.homedir(), '.config', 'opencode', filename);
+    if (await fileExists(globalConfig)) {
+      return globalConfig;
+    }
   }
 
   return null;
+}
+
+/**
+ * @param {string} source
+ * @returns {string}
+ */
+function removeTrailingCommas(source) {
+  let output = '';
+  let index = 0;
+  let inString = false;
+  let escaped = false;
+
+  while (index < source.length) {
+    const char = source[index];
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      output += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === ',') {
+      let lookahead = index + 1;
+      while (lookahead < source.length && /\s/.test(source[lookahead])) {
+        lookahead += 1;
+      }
+      if (source[lookahead] === '}' || source[lookahead] === ']') {
+        index += 1;
+        continue;
+      }
+    }
+
+    output += char;
+    index += 1;
+  }
+
+  return output;
+}
+
+/**
+ * Strip JSONC comments and trailing commas for JSON.parse.
+ *
+ * @param {string} source
+ * @returns {string}
+ */
+function normalizeJsonc(source) {
+  let output = '';
+  let index = 0;
+  let inString = false;
+  let escaped = false;
+
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      output += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      while (index < source.length && source[index] !== '\n') {
+        output += ' ';
+        index += 1;
+      }
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      output += '  ';
+      index += 2;
+      while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) {
+        output += source[index] === '\n' ? '\n' : ' ';
+        index += 1;
+      }
+      if (index < source.length) {
+        output += '  ';
+        index += 2;
+      }
+      continue;
+    }
+
+    output += char;
+    index += 1;
+  }
+
+  return removeTrailingCommas(output);
+}
+
+/**
+ * @param {string} source
+ * @returns {any}
+ */
+export function parseJsoncConfig(source) {
+  return JSON.parse(normalizeJsonc(source));
 }
 
 /**
@@ -316,6 +444,251 @@ export function filterModelIds(ids, includeRegex, excludeRegex) {
 }
 
 /**
+ * @param {string} source
+ * @param {number} index
+ * @returns {number}
+ */
+function skipWhitespaceAndComments(source, index) {
+  let cursor = index;
+  for (;;) {
+    while (cursor < source.length && /\s/.test(source[cursor])) {
+      cursor += 1;
+    }
+    if (source[cursor] === '/' && source[cursor + 1] === '/') {
+      cursor += 2;
+      while (cursor < source.length && source[cursor] !== '\n') {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (source[cursor] === '/' && source[cursor + 1] === '*') {
+      cursor += 2;
+      while (cursor < source.length && !(source[cursor] === '*' && source[cursor + 1] === '/')) {
+        cursor += 1;
+      }
+      cursor = Math.min(cursor + 2, source.length);
+      continue;
+    }
+    return cursor;
+  }
+}
+
+/**
+ * @param {string} source
+ * @param {number} start
+ * @returns {{ value: string, end: number }}
+ */
+function readJsonString(source, start) {
+  let cursor = start + 1;
+  let escaped = false;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    if (escaped) {
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '"') {
+      return { value: JSON.parse(source.slice(start, cursor + 1)), end: cursor + 1 };
+    }
+    cursor += 1;
+  }
+  throw new Error('Unterminated JSON string.');
+}
+
+/**
+ * @param {string} source
+ * @param {number} start
+ * @returns {number}
+ */
+function findMatchingContainerEnd(source, start) {
+  const open = source[start];
+  const close = open === '{' ? '}' : ']';
+  let depth = 0;
+  let cursor = start;
+
+  while (cursor < source.length) {
+    cursor = skipWhitespaceAndComments(source, cursor);
+    const char = source[cursor];
+    if (char === '"') {
+      cursor = readJsonString(source, cursor).end;
+      continue;
+    }
+    if (char === open) {
+      depth += 1;
+    } else if (char === close) {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor + 1;
+      }
+    }
+    cursor += 1;
+  }
+
+  throw new Error(`Unterminated JSON container starting at ${start}.`);
+}
+
+/**
+ * @param {string} source
+ * @param {number} start
+ * @returns {number}
+ */
+function findValueEnd(source, start) {
+  const cursor = skipWhitespaceAndComments(source, start);
+  const char = source[cursor];
+  if (char === '{' || char === '[') {
+    return findMatchingContainerEnd(source, cursor);
+  }
+  if (char === '"') {
+    return readJsonString(source, cursor).end;
+  }
+
+  let end = cursor;
+  while (end < source.length && source[end] !== ',' && source[end] !== '}' && source[end] !== ']') {
+    end += 1;
+  }
+  return end;
+}
+
+/**
+ * @param {string} source
+ * @param {number} objectStart
+ * @param {string} propName
+ * @returns {{keyStart: number, valueStart: number, valueEnd: number}|null}
+ */
+function findPropertyInObject(source, objectStart, propName) {
+  if (source[objectStart] !== '{') {
+    return null;
+  }
+
+  const objectEnd = findMatchingContainerEnd(source, objectStart) - 1;
+  let cursor = objectStart + 1;
+  while (cursor < objectEnd) {
+    cursor = skipWhitespaceAndComments(source, cursor);
+    if (source[cursor] === ',') {
+      cursor += 1;
+      continue;
+    }
+    if (source[cursor] !== '"') {
+      cursor += 1;
+      continue;
+    }
+
+    const keyStart = cursor;
+    const key = readJsonString(source, cursor);
+    cursor = skipWhitespaceAndComments(source, key.end);
+    if (source[cursor] !== ':') {
+      continue;
+    }
+
+    const valueStart = skipWhitespaceAndComments(source, cursor + 1);
+    const valueEnd = findValueEnd(source, valueStart);
+    if (key.value === propName) {
+      return { keyStart, valueStart, valueEnd };
+    }
+    cursor = valueEnd;
+  }
+
+  return null;
+}
+
+/**
+ * @param {string} source
+ * @param {number} index
+ * @returns {string}
+ */
+function lineIndentAt(source, index) {
+  const lineStart = source.lastIndexOf('\n', index) + 1;
+  const match = source.slice(lineStart, index).match(/^\s*/);
+  return match ? match[0] : '';
+}
+
+/**
+ * @param {Record<string, unknown>} models
+ * @param {string} indent
+ * @returns {string}
+ */
+function stringifyModelsValue(models, indent) {
+  return JSON.stringify(models, null, 2)
+    .split('\n')
+    .map((line, index) => (index === 0 ? line : `${indent}${line}`))
+    .join('\n');
+}
+
+/**
+ * @param {string} source
+ * @param {number} objectStart
+ * @returns {boolean}
+ */
+function objectNeedsCommaBeforeInsert(source, objectStart) {
+  let cursor = findMatchingContainerEnd(source, objectStart) - 2;
+  while (cursor > objectStart && /\s/.test(source[cursor])) {
+    cursor -= 1;
+  }
+  return source[cursor] !== '{' && source[cursor] !== ',';
+}
+
+/**
+ * Best-effort JSONC-preserving update for provider.<name>.models.
+ *
+ * @param {string} originalText
+ * @param {Record<string, any>} config
+ * @param {string[]} providerNames
+ * @returns {string|null}
+ */
+function updateConfigTextModels(originalText, config, providerNames) {
+  const rootStart = skipWhitespaceAndComments(originalText, 0);
+  if (originalText[rootStart] !== '{') {
+    return null;
+  }
+
+  const providerProp = findPropertyInObject(originalText, rootStart, 'provider');
+  if (!providerProp || originalText[providerProp.valueStart] !== '{') {
+    return null;
+  }
+
+  const replacements = [];
+  for (const providerName of providerNames) {
+    const providerEntry = findPropertyInObject(originalText, providerProp.valueStart, providerName);
+    if (!providerEntry || originalText[providerEntry.valueStart] !== '{') {
+      return null;
+    }
+
+    const models = config.provider?.[providerName]?.models;
+    if (!models || typeof models !== 'object') {
+      continue;
+    }
+
+    const providerObjectStart = providerEntry.valueStart;
+    const modelsProp = findPropertyInObject(originalText, providerObjectStart, 'models');
+    if (modelsProp) {
+      const indent = lineIndentAt(originalText, modelsProp.keyStart);
+      replacements.push({
+        start: modelsProp.valueStart,
+        end: modelsProp.valueEnd,
+        text: stringifyModelsValue(models, indent),
+      });
+      continue;
+    }
+
+    const objectEnd = findMatchingContainerEnd(originalText, providerObjectStart) - 1;
+    const closeIndent = lineIndentAt(originalText, objectEnd);
+    const propIndent = `${closeIndent}  `;
+    const comma = objectNeedsCommaBeforeInsert(originalText, providerObjectStart) ? ',' : '';
+    replacements.push({
+      start: objectEnd,
+      end: objectEnd,
+      text: `${comma}\n${propIndent}"models": ${stringifyModelsValue(models, propIndent)}\n${closeIndent}`,
+    });
+  }
+
+  return replacements
+    .sort((a, b) => b.start - a.start)
+    .reduce((text, replacement) => (
+      `${text.slice(0, replacement.start)}${replacement.text}${text.slice(replacement.end)}`
+    ), originalText);
+}
+
+/**
  * @param {string} configPath
  * @returns {Promise<string>}
  */
@@ -333,11 +706,26 @@ export async function backupConfig(configPath) {
  *
  * @param {string} configPath
  * @param {unknown} data
+ * @param {{originalText?: string, changedProviderNames?: string[]}} options
  * @returns {Promise<void>}
  */
-export async function writeConfig(configPath, data) {
+export async function writeConfig(configPath, data, options = {}) {
   const tempPath = `${configPath}.tmp-${process.pid}-${Date.now()}`;
-  const payload = `${JSON.stringify(data, null, 2)}\n`;
+  let payload = `${JSON.stringify(data, null, 2)}\n`;
+  if (
+    options.originalText
+    && Array.isArray(options.changedProviderNames)
+    && options.changedProviderNames.length > 0
+  ) {
+    const patched = updateConfigTextModels(
+      options.originalText,
+      /** @type {Record<string, any>} */ (data),
+      options.changedProviderNames,
+    );
+    if (patched) {
+      payload = patched;
+    }
+  }
   await fs.writeFile(tempPath, payload, 'utf8');
   await fs.rename(tempPath, configPath);
 }
@@ -347,7 +735,7 @@ export async function writeConfig(configPath, data) {
  *
  * @param {string} providerName
  * @param {Record<string, any>} providerConfig
- * @returns {Promise<{providerName: string, remoteCount: number, localCount: number, added: string[], dryRun: boolean}>}
+ * @returns {Promise<{providerName: string, remoteCount: number, localCount: number, added: string[], removed: string[], dryRun: boolean, mode: string, changed: boolean}>}
  */
 export async function syncProviderModels(providerName, providerConfig) {
   const options = providerConfig?.options ?? {};
@@ -355,6 +743,7 @@ export async function syncProviderModels(providerName, providerConfig) {
   const endpoint = modelSync.endpoint ?? DEFAULT_ENDPOINT;
   const timeoutMs = Number.isFinite(modelSync.timeoutMs) ? Number(modelSync.timeoutMs) : DEFAULT_TIMEOUT_MS;
   const dryRun = Boolean(modelSync.dryRun);
+  const mode = modelSync.mode === 'replace' ? 'replace' : DEFAULT_SYNC_MODE;
 
   const apiKey = await resolveProviderApiKey(providerName, options);
   const modelsUrl = buildModelsUrl(options.baseURL, endpoint);
@@ -363,17 +752,26 @@ export async function syncProviderModels(providerName, providerConfig) {
   const extracted = extractModelIds(payload);
   const filtered = filterModelIds(extracted, modelSync.includeRegex ?? null, modelSync.excludeRegex ?? null);
 
-  if (!providerConfig.models || typeof providerConfig.models !== 'object') {
-    providerConfig.models = {};
-  }
-
-  const localModels = providerConfig.models;
+  const localModels = providerConfig.models && typeof providerConfig.models === 'object' ? providerConfig.models : {};
   const localIds = new Set(Object.keys(localModels));
   const added = filtered.filter((id) => !localIds.has(id));
+  const remoteIds = new Set(filtered);
+  const removed = mode === 'replace' ? [...localIds].filter((id) => !remoteIds.has(id)) : [];
+  const nextModels = Object.fromEntries(filtered.map((id) => [id, { name: id }]));
+  const changed = mode === 'replace'
+    ? JSON.stringify(localModels) !== JSON.stringify(nextModels)
+    : added.length > 0;
 
   if (!dryRun) {
-    for (const id of added) {
-      localModels[id] = { name: id };
+    if (mode === 'replace') {
+      providerConfig.models = nextModels;
+    } else {
+      if (!providerConfig.models || typeof providerConfig.models !== 'object') {
+        providerConfig.models = {};
+      }
+      for (const id of added) {
+        providerConfig.models[id] = { name: id };
+      }
     }
   }
 
@@ -382,7 +780,10 @@ export async function syncProviderModels(providerName, providerConfig) {
     remoteCount: filtered.length,
     localCount: localIds.size,
     added,
+    removed,
     dryRun,
+    mode,
+    changed,
   };
 }
 
@@ -406,12 +807,13 @@ export async function runModelSyncPlugin(_ctx) {
 
   log(`Config found: ${configPath}`);
 
+  const rawConfig = await fs.readFile(configPath, 'utf8');
   /** @type {Record<string, any>} */
   let config;
   try {
-    config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+    config = parseJsoncConfig(rawConfig);
   } catch (err) {
-    error(`Failed to read/parse config JSON: ${String(err)}`);
+    error(`Failed to read/parse config JSON/JSONC: ${String(err)}`);
     return {};
   }
 
@@ -428,22 +830,29 @@ export async function runModelSyncPlugin(_ctx) {
   let changed = false;
   let hasFailure = false;
   let totalAdded = 0;
+  let totalRemoved = 0;
+  const changedProviderNames = [];
 
   for (const providerName of providerNames) {
     try {
       const provider = providers[providerName];
       const result = await syncProviderModels(providerName, provider);
       totalAdded += result.added.length;
+      totalRemoved += result.removed.length;
 
       log(
-        `${providerName}: remote=${result.remoteCount}, local=${result.localCount}, added=${result.added.length}, dryRun=${result.dryRun}`,
+        `${providerName}: remote=${result.remoteCount}, local=${result.localCount}, added=${result.added.length}, removed=${result.removed.length}, mode=${result.mode}, dryRun=${result.dryRun}`,
       );
 
       if (result.added.length > 0) {
         log(`${providerName}: new models => ${result.added.join(', ')}`);
-        if (!result.dryRun) {
-          changed = true;
-        }
+      }
+      if (result.removed.length > 0) {
+        log(`${providerName}: removed models => ${result.removed.join(', ')}`);
+      }
+      if (result.changed && !result.dryRun) {
+        changed = true;
+        changedProviderNames.push(providerName);
       }
     } catch (err) {
       hasFailure = true;
@@ -458,8 +867,8 @@ export async function runModelSyncPlugin(_ctx) {
 
   if (!changed) {
     log('No config changes to write.');
-    if (totalAdded > 0) {
-      log('All additions were dry-run only.');
+    if (totalAdded > 0 || totalRemoved > 0) {
+      log('All model changes were dry-run only.');
     }
     return {};
   }
@@ -474,9 +883,9 @@ export async function runModelSyncPlugin(_ctx) {
   }
 
   try {
-    await writeConfig(configPath, config);
+    await writeConfig(configPath, config, { originalText: rawConfig, changedProviderNames });
     log(`Config updated successfully: ${configPath}`);
-    log(`已同步 ${totalAdded} 个模型，请重启 OpenCode 以刷新模型选择器。`);
+    log(`已同步 ${totalAdded} 个模型，移除 ${totalRemoved} 个模型，请重启 OpenCode 以刷新模型选择器。`);
   } catch (err) {
     error(`Failed to write config atomically: ${String(err)}`);
   }
@@ -489,6 +898,7 @@ export const __internal = {
   LOG_PREFIX,
   DEFAULT_ENDPOINT,
   DEFAULT_TIMEOUT_MS,
+  DEFAULT_SYNC_MODE,
   claimDuplicateGuard,
   pathToFileURL,
 };

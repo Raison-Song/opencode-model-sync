@@ -44,27 +44,9 @@
 
 ## 快速使用
 
-1. 在 `opencode.json` 中添加 npm 包名或 GitHub 安装地址。
+1. 在 `opencode.json` 中添加 插件文件夹路径 或 GitHub 安装地址。
 2. 给目标 provider 配置 `options.modelSync.enabled = true
 3. 启动 OpenCode
-
-## 本地插件开发 / 手工加载
-
-如果你是在开发这个仓库，或者需要手工加载本地文件，可以使用：
-
-```text
-.opencode/plugins/model-sync.js
-```
-
-官方目录名是 `plugins`（复数）。
-
-为了兼容旧配置，本仓库也保留了：
-
-```text
-.opencode/plugin/model-sync.js
-```
-
-但新的文档和新项目都应优先使用 `plugins/`。
 
 ## 同步行为
 
@@ -77,8 +59,15 @@
    - `{ object: "list", data: [...] }`
    - `[...]`
    - `{ models: [...] }`
-5. 比对差集并追加模型（不覆盖、不删除）
+5. 按 `modelSync.mode` 同步模型：默认 `append` 只追加；`replace` 会用远端列表替换本地 `models`
 6. 非 dry-run 模式下创建 `backups/` 目录并原子写入备份
+
+`modelSync.mode` 可选值：
+
+- `append`：默认值。只新增远端存在、本地不存在的模型，不删除本地已有模型。
+- `replace`：用远端过滤后的模型列表整体替换本地 `provider.<name>.models`，本地独有模型会被删除。
+
+插件会保持配置文件原路径写回：原来是 `opencode.json` 就写回 `opencode.json`，原来是 `opencode.jsonc` 就写回 `opencode.jsonc`。对 JSONC 文件会尽量只替换 `models` 区域，以保留其他注释和结构。
 
 如果同一个 OpenCode 进程同时加载了 npm 插件和本地 shim，插件会自动跳过重复初始化，避免重复写入配置。
 
@@ -94,7 +83,7 @@
 
 - 会打印远端/本地/新增数量和新增模型 ID
 - 不会创建备份
-- 不会写入 `opencode.json`
+- 不会写入 `opencode.json` / `opencode.jsonc`
 
 ## 最小测试样例（本地 mock）
 
