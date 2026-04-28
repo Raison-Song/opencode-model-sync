@@ -2,7 +2,7 @@
   // OpenCode config schema
   "$schema": "https://opencode.ai/config.json",
   // Install and load the plugin automatically from npm
-  "plugin": ["opencode-model-sync"],
+  "plugin": ["opencode-model-sync@git+https://github.com/Raison-Song/opencode-model-sync"],
   "provider": {
     "example": {
       // Provider display/name key
@@ -20,6 +20,8 @@
           "enabled": true,
           // Relative endpoint (or absolute URL)
           "endpoint": "/models",
+          // Sync mode: "append" keeps local-only models, "replace" mirrors remote models
+          "mode": "append",
           // Optional include regex (null = include all)
           "includeRegex": null,
           // Exclude non-chat/non-coding models

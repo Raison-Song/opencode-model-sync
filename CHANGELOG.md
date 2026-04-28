@@ -20,3 +20,5 @@ All notable changes to this project will be documented in this file.
 - Add duplicate-load protection so npm and local shims do not run twice in one process.
 - Write future config backups into a sibling `backups/` directory.
 - Reuse OpenCode `auth.json` API credentials when `options.apiKey` is not explicitly configured.
+- Read `opencode.jsonc` configs and preserve comments with targeted `models` updates where possible.
+- Add `modelSync.mode` with `append` and `replace` sync behavior.
