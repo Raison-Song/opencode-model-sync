@@ -50,7 +50,7 @@ export MINGIE_API_KEY="sk-xxxx"
 opencode
 ```
 
-如果你已经用 `opencode providers login` 或其他 OpenCode 认证流程保存了 `type: "api"` 的 provider 凭据，插件会自动回退读取 OpenCode 的 `auth.json`，不必重复配置环境变量。
+如果你已经用 OpenCode 保存了 `type: "api"` 的 provider 凭据，插件会回退读取 OpenCode 当前默认本地 `auth.json` 中该 provider 的 API key，因此这类 provider 可以不重复配置环境变量。
 
 ## 本地插件开发 / 手工加载
 
@@ -135,7 +135,7 @@ node --test test/model-sync.test.mjs
 
 - 检查 `apiKey` 对应环境变量是否存在
 - 检查 `{env:XXX}` 拼写
-- 如果你已经在 OpenCode 里认证过 provider，确认对应凭据确实保存在 OpenCode 的 `auth.json` 且类型是 `api`
+- 如果你已经在 OpenCode 里认证过 provider，确认对应凭据确实保存在 OpenCode 当前默认本地 `auth.json` 且类型是 `api`
 
 ### 4) 出现 `/v1/v1/models` 或 `/v1models`
 

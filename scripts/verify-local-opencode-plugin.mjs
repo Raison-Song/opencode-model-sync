@@ -31,6 +31,7 @@ try {
 
   const config = {
     $schema: 'https://opencode.ai/config.json',
+    plugin: [`file:${pluginPath}`],
     provider: {
       mocksync: {
         name: 'mocksync',
@@ -80,7 +81,12 @@ try {
   const updated = JSON.parse(await fs.readFile(configPath, 'utf8'));
   const hasModel = Object.prototype.hasOwnProperty.call(updated.provider.mocksync.models, 'test-model');
   const backupDir = path.join(dir, 'backups');
-  const backupEntries = await fs.readdir(backupDir);
+  const backupEntries = await fs.readdir(backupDir).catch((err) => {
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+      return [];
+    }
+    throw err;
+  });
   const hasBackup = backupEntries.some((entry) => entry.startsWith('opencode.json.bak.'));
 
   console.log(`EXIT=${exitCode}`);
