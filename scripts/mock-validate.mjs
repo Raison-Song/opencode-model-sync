@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import http from 'node:http';
-import { syncProviderModels } from '../.opencode/plugin/model-sync.js';
+import { syncProviderModels } from '../model-sync-core.js';
 
 const server = http.createServer((_, res) => {
   res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -12,3 +12,11 @@ All notable changes to this project will be documented in this file.
 - Support for `{env:VAR_NAME}` API key placeholders.
 - `dryRun` mode, include/exclude regex filtering, timeout control.
 - README, JSONC configuration example, and Node built-in test suite.
+
+### Changed
+- Publish the plugin as a standard npm package entrypoint.
+- Document `opencode.json.plugin` as the primary installation path.
+- Add `.opencode/plugins/model-sync.js` and keep `.opencode/plugin/model-sync.js` as a compatibility shim.
+- Add duplicate-load protection so npm and local shims do not run twice in one process.
+- Write future config backups into a sibling `backups/` directory.
+- Reuse OpenCode `auth.json` API credentials when `options.apiKey` is not explicitly configured.

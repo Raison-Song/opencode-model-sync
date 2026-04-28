@@ -6,13 +6,20 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  ModelSyncPlugin,
+} from '../index.js';
+import * as pluralShim from '../.opencode/plugins/model-sync.js';
+import {
+  __internal,
+  backupConfig,
   buildModelsUrl,
   extractModelIds,
   filterModelIds,
   fetchRemoteModels,
+  resolveProviderApiKey,
   syncProviderModels,
   writeConfig,
-} from '../.opencode/plugin/model-sync.js';
+} from '../model-sync-core.js';
 
 test('buildModelsUrl normalizes slashes', () => {
   assert.equal(buildModelsUrl('https://example.com/v1/', '/models'), 'https://example.com/v1/models');
@@ -83,4 +90,63 @@ test('writeConfig writes JSON atomically', async () => {
   const raw = await fs.readFile(configPath, 'utf8');
   const parsed = JSON.parse(raw);
   assert.equal(parsed.provider.demo.models.a.name, 'a');
+});
+
+test('backupConfig writes backups into sibling backups directory', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'backup-dir-test-'));
+  const configPath = path.join(dir, 'opencode.json');
+  await fs.writeFile(configPath, '{}\n', 'utf8');
+
+  const backupPath = await backupConfig(configPath);
+
+  assert.equal(path.dirname(backupPath), path.join(dir, 'backups'));
+  assert.equal(path.basename(backupPath).startsWith('opencode.json.bak.'), true);
+});
+
+test('plural local shim re-exports package entrypoint', () => {
+  assert.equal(pluralShim.default, ModelSyncPlugin);
+  assert.deepEqual(Object.keys(pluralShim).sort(), ['ModelSyncPlugin', 'default']);
+});
+
+test('duplicate guard only allows first claim', (t) => {
+  delete globalThis[__internal.DUPLICATE_LOAD_KEY];
+  t.after(() => {
+    delete globalThis[__internal.DUPLICATE_LOAD_KEY];
+  });
+
+  assert.equal(__internal.claimDuplicateGuard(), true);
+  assert.equal(__internal.claimDuplicateGuard(), false);
+});
+
+test('resolveProviderApiKey falls back to OpenCode auth.json api credentials', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'model-sync-home-'));
+  const authDir = path.join(home, '.local', 'share', 'opencode');
+  await fs.mkdir(authDir, { recursive: true });
+  await fs.writeFile(
+    path.join(authDir, 'auth.json'),
+    JSON.stringify({ mingie: { type: 'api', key: 'sk-from-auth' } }, null, 2),
+    'utf8',
+  );
+
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+
+  try {
+    const apiKey = await resolveProviderApiKey('mingie', { apiKey: undefined });
+    assert.equal(apiKey, 'sk-from-auth');
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+
+    if (originalUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = originalUserProfile;
+    }
+  }
 });

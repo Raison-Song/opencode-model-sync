@@ -1,6 +1,8 @@
 {
   // OpenCode config schema
   "$schema": "https://opencode.ai/config.json",
+  // Install and load the plugin automatically from npm
+  "plugin": ["opencode-model-sync"],
   "provider": {
     "mingie": {
       // Provider display/name key

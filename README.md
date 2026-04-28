@@ -4,22 +4,26 @@
 ![node](https://img.shields.io/badge/node-%3E%3D18-blue.svg)
 ![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)
 
-一个 **OpenCode 本地插件**，在 OpenCode 启动时自动同步远端 provider `/models` 到 `opencode.json` 的 `provider.<name>.models`。
+一个 **OpenCode 插件**，在 OpenCode 启动时自动同步远端 provider `/models` 到 `opencode.json` 的 `provider.<name>.models`。
 
-- ✅ 本地插件（放到 `.opencode/plugin/`）
-- ✅ 零依赖（仅 Node.js 标准库）
+- ✅ 支持 `opencode.json` 的 `plugin` 字段自动安装
+- ✅ 保留本地插件开发/手工加载方式
+- ✅ 零运行时依赖（仅 Node.js 标准库）
 - ✅ 安全写入（先备份，再原子替换）
 - ✅ 支持 dry-run 与多种返回格式
 
 ## 安装
 
-将插件文件复制到项目目录：
+推荐通过 `opencode.json` 让 OpenCode 自动安装 npm 插件：
 
-```text
-.opencode/plugin/model-sync.js
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-model-sync"]
+}
 ```
 
-> 注意：目录是 `plugin`（单数），不是 `plugins`。
+OpenCode 会在启动时自动安装并缓存这个插件包；不需要你手工复制插件文件。
 
 ## 配置示例（JSONC）
 
@@ -27,9 +31,10 @@
 
 ## 快速使用
 
-1. 在 `opencode.json` 中给目标 provider 配置 `options.modelSync.enabled = true`。
-2. 设置 API key 环境变量。
-3. 启动 OpenCode。
+1. 在 `opencode.json` 中添加：`"plugin": ["opencode-model-sync"]`
+2. 给目标 provider 配置 `options.modelSync.enabled = true`
+3. 如果 provider 已通过 OpenCode 登录并保存了 API 凭据，可直接复用；否则再显式设置 `apiKey`
+4. 启动 OpenCode
 
 ### Windows PowerShell
 
@@ -45,6 +50,26 @@ export MINGIE_API_KEY="sk-xxxx"
 opencode
 ```
 
+如果你已经用 `opencode providers login` 或其他 OpenCode 认证流程保存了 `type: "api"` 的 provider 凭据，插件会自动回退读取 OpenCode 的 `auth.json`，不必重复配置环境变量。
+
+## 本地插件开发 / 手工加载
+
+如果你是在开发这个仓库，或者需要手工加载本地文件，可以使用：
+
+```text
+.opencode/plugins/model-sync.js
+```
+
+官方目录名是 `plugins`（复数）。
+
+为了兼容旧配置，本仓库也保留了：
+
+```text
+.opencode/plugin/model-sync.js
+```
+
+但新的文档和新项目都应优先使用 `plugins/`。
+
 ## 同步行为
 
 插件启动后会：
@@ -57,7 +82,15 @@ opencode
    - `[...]`
    - `{ models: [...] }`
 5. 比对差集并追加模型（不覆盖、不删除）
-6. 非 dry-run 模式下创建备份并原子写入
+6. 非 dry-run 模式下创建 `backups/` 目录并原子写入备份
+
+如果同一个 OpenCode 进程同时加载了 npm 插件和本地 shim，插件会自动跳过重复初始化，避免重复写入配置。
+
+备份文件默认放在目标配置文件同目录下的 `backups/` 目录，例如：
+
+```text
+~/.config/opencode/backups/opencode.json.bak.2026-04-28T05-49-35-984Z
+```
 
 ## dry-run 测试
 
@@ -81,39 +114,47 @@ node --test test/model-sync.test.mjs
 { "object": "list", "data": [{"id":"test-model"}] }
 ```
 
-并验证可正确提取模型与同步写入行为。
+并验证可正确提取模型、同步写入行为、`backups/` 目录行为，以及 npm 入口与本地 shim 的兼容性。
 
 ## FAQ / 排障
 
 ### 1) 插件没有加载
 
-- 检查路径是否为 `.opencode/plugin/`（单数）
-- 文件扩展名是否是 `.js`
+- 如果走 npm 方式，检查 `opencode.json` 里是否有 `"plugin": ["opencode-model-sync"]`
+- 如果走本地方式，检查路径是否为 `.opencode/plugins/`
+- 旧目录 `.opencode/plugin/` 在本仓库里仍兼容，但不建议新项目继续使用
 - Node 版本是否 `>= 18`
 
-### 2) HTTP 401 / 403
+### 2) 我手工执行了 `npm install opencode-model-sync`，为什么没生效？
+
+- 仅安装 npm 包不会自动注册到 OpenCode
+- 需要通过 `opencode.json` 的 `plugin` 字段让 OpenCode 加载它
+- 或者把本地 shim 放到 `.opencode/plugins/`
+
+### 3) HTTP 401 / 403
 
 - 检查 `apiKey` 对应环境变量是否存在
 - 检查 `{env:XXX}` 拼写
+- 如果你已经在 OpenCode 里认证过 provider，确认对应凭据确实保存在 OpenCode 的 `auth.json` 且类型是 `api`
 
-### 3) 出现 `/v1/v1/models` 或 `/v1models`
+### 4) 出现 `/v1/v1/models` 或 `/v1models`
 
 - 检查 `baseURL` 结尾斜杠
 - 检查 `endpoint` 开头斜杠
 - 插件已做标准化拼接，建议使用 `baseURL: https://host/v1` + `endpoint: /models`
 
-### 4) 返回格式不兼容
+### 5) 返回格式不兼容
 
 - 查看日志中错误信息
 - 扩展 `extractModelIds` 的字段映射逻辑（目前支持 `id/name/model`）
 
-### 5) 写入后模型选择器未刷新
+### 6) 写入后模型选择器未刷新
 
 - 必须重启 OpenCode（provider/models 在启动时加载）
 
-### 6) 备份越来越多
+### 7) 备份越来越多
 
-- 可定期清理 `opencode.json.bak.*`
+- 可定期清理 `backups/` 目录下的 `opencode.json.bak.*`
 
 ## 安全与隐私声明
 
@@ -132,6 +173,7 @@ node --test test/model-sync.test.mjs
 
 ```bash
 node --test
+npm pack --dry-run
 ```
 
 ## 版本
