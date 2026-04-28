@@ -1,0 +1,14 @@
+{
+  "name": "opencode-model-sync",
+  "version": "0.1.0",
+  "description": "OpenCode local plugin that syncs remote provider models into opencode.json.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
