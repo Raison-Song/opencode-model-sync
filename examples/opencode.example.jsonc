@@ -1,0 +1,37 @@
+{
+  // OpenCode config schema
+  "$schema": "https://opencode.ai/config.json",
+  // Install and load the plugin automatically from npm
+  "plugin": ["opencode-model-sync"],
+  "provider": {
+    "example": {
+      // Provider display/name key
+      "name": "example",
+      // OpenAI compatible provider package
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        // Provider API base URL
+        "baseURL": "https://api.example.com/v1",
+        // API key placeholder, resolved from process.env
+        "apiKey": "{env:EXAMPLE_API_KEY}",
+        // Model sync options for this plugin
+        "modelSync": {
+          // Enable model sync
+          "enabled": true,
+          // Relative endpoint (or absolute URL)
+          "endpoint": "/models",
+          // Optional include regex (null = include all)
+          "includeRegex": null,
+          // Exclude non-chat/non-coding models
+          "excludeRegex": "embedding|embed|rerank|audio|tts|whisper|moderation",
+          // HTTP timeout (ms)
+          "timeoutMs": 15000,
+          // Dry run: log only, do not write file
+          "dryRun": false
+        }
+      },
+      // Existing local models map, plugin will append new IDs here
+      "models": {}
+    }
+  }
+}

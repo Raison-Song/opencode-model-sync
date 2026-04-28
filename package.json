@@ -1,0 +1,38 @@
+{
+  "name": "opencode-model-sync",
+  "version": "0.1.0",
+  "description": "OpenCode plugin that syncs remote provider models into opencode.json.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "model-sync-core.js",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "opencode",
+    "plugin",
+    "models",
+    "sync"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Raison-Song/opencode-model-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Raison-Song/opencode-model-sync/issues"
+  },
+  "homepage": "https://github.com/Raison-Song/opencode-model-sync#readme",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
