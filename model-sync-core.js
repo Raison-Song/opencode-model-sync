@@ -199,6 +199,8 @@ function removeTrailingCommas(source) {
  * @returns {string}
  */
 function normalizeJsonc(source) {
+  source = source.replace(/^\uFEFF/, '');
+
   let output = '';
   let index = 0;
   let inString = false;
