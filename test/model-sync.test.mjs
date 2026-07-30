@@ -14,6 +14,7 @@ import {
   backupConfig,
   buildModelsUrl,
   extractModelIds,
+  extractModelInfo,
   filterModelIds,
   fetchRemoteModels,
   parseJsoncConfig,
@@ -41,6 +42,65 @@ test('extractModelIds supports multiple payload formats', () => {
   assert.deepEqual(extractModelIds({ object: 'list', data: [{ id: 'a' }, { name: 'b' }] }), ['a', 'b']);
   assert.deepEqual(extractModelIds([{ model: 'c' }, 'd']), ['c', 'd']);
   assert.deepEqual(extractModelIds({ models: [{ id: 'e' }] }), ['e']);
+});
+
+test('extractModelInfo maps LiteLLM metadata to OpenCode model fields', () => {
+  const info = extractModelInfo({ data: [{
+    model_name: 'vision-coder',
+    model_info: {
+      mode: 'chat',
+      max_input_tokens: 128000,
+      max_output_tokens: '8192',
+      supports_vision: true,
+      supports_reasoning: false,
+      supports_function_calling: true,
+      input_cost_per_token: 0.000002,
+      output_cost_per_token: '0.000006',
+      cache_read_input_token_cost: 0.0000002,
+    },
+  }] });
+
+  assert.deepEqual(info.get('vision-coder'), {
+    name: 'vision-coder',
+    mode: 'chat',
+    limit: { context: 128000, output: 8192 },
+    attachment: true,
+    reasoning: false,
+    tool_call: true,
+    cost: { input: 2, output: 6, cache_read: 0.2 },
+  });
+});
+
+test('syncProviderModels enriches models from an optional info endpoint', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    if (req.url === '/v1/model/info') {
+      res.end(JSON.stringify({ data: [{ model_name: 'coder', model_info: {
+        mode: 'chat', max_input_tokens: 32000, supports_function_calling: true,
+      } }] }));
+    } else {
+      res.end(JSON.stringify({ data: [{ id: 'coder' }] }));
+    }
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+
+  try {
+    const providerConfig = {
+      options: { baseURL: `http://127.0.0.1:${address.port}/v1`, modelSync: {
+        enabled: true, infoEndpoint: '/model/info',
+      } },
+      models: { coder: { name: 'My Coder' } },
+    };
+    const result = await syncProviderModels('litellm', providerConfig);
+    assert.equal(result.changed, true);
+    assert.deepEqual(providerConfig.models.coder, {
+      name: 'My Coder', mode: 'chat', limit: { context: 32000 }, tool_call: true,
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('filterModelIds applies include and exclude regex', () => {
