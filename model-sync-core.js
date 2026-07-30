@@ -339,16 +339,25 @@ export function buildModelsUrl(baseURL, endpoint = DEFAULT_ENDPOINT) {
  * @param {string} url
  * @param {string} apiKey
  * @param {number} timeoutMs
+ * @param {Record<string, unknown>} providerHeaders
  * @returns {Promise<unknown>}
  */
-export async function fetchRemoteModels(url, apiKey, timeoutMs = DEFAULT_TIMEOUT_MS) {
+export async function fetchRemoteModels(url, apiKey, timeoutMs = DEFAULT_TIMEOUT_MS, providerHeaders = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     /** @type {Record<string,string>} */
     const headers = { Accept: 'application/json' };
-    if (apiKey) {
+    if (providerHeaders && typeof providerHeaders === 'object' && !Array.isArray(providerHeaders)) {
+      for (const [name, value] of Object.entries(providerHeaders)) {
+        if (typeof value === 'string') {
+          headers[name] = resolveEnvValue(value);
+        }
+      }
+    }
+    const hasAuthorization = Object.keys(headers).some((name) => name.toLowerCase() === 'authorization');
+    if (apiKey && !hasAuthorization) {
       headers.Authorization = `Bearer ${apiKey}`;
     }
 
@@ -750,7 +759,7 @@ export async function syncProviderModels(providerName, providerConfig) {
   const apiKey = await resolveProviderApiKey(providerName, options);
   const modelsUrl = buildModelsUrl(options.baseURL, endpoint);
 
-  const payload = await fetchRemoteModels(modelsUrl, apiKey, timeoutMs);
+  const payload = await fetchRemoteModels(modelsUrl, apiKey, timeoutMs, options.headers);
   const extracted = extractModelIds(payload);
   const filtered = filterModelIds(extracted, modelSync.includeRegex ?? null, modelSync.excludeRegex ?? null);
 
@@ -830,7 +839,7 @@ export async function runModelSyncPlugin(_ctx) {
   log(`Providers to check: ${providerNames.join(', ')}`);
 
   let changed = false;
-  let hasFailure = false;
+  let failedCount = 0;
   let totalAdded = 0;
   let totalRemoved = 0;
   const changedProviderNames = [];
@@ -857,14 +866,13 @@ export async function runModelSyncPlugin(_ctx) {
         changedProviderNames.push(providerName);
       }
     } catch (err) {
-      hasFailure = true;
+      failedCount += 1;
       error(`${providerName}: sync failed: ${String(err)}`);
     }
   }
 
-  if (hasFailure) {
-    warn('At least one provider failed. For safety, config file will not be written.');
-    return {};
+  if (failedCount > 0) {
+    warn(`${failedCount} provider(s) failed; successful provider changes will still be written.`);
   }
 
   if (!changed) {

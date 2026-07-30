@@ -55,12 +55,16 @@
 1. 按优先级定位配置文件（`OPENCODE_CONFIG` → 向上查找 → `~/.config/opencode/opencode.json`）
 2. 查找启用了 `modelSync.enabled === true` 的 provider
 3. 请求 models endpoint
+   - 合并 `provider.options.headers`（包括 `x-api-key` 等自定义认证头）
+   - 仅当未配置 `Authorization` 时，才使用 `apiKey` 或 OpenCode `auth.json` 凭据补充 Bearer 认证
 4. 兼容提取：
    - `{ object: "list", data: [...] }`
    - `[...]`
    - `{ models: [...] }`
 5. 按 `modelSync.mode` 同步模型：默认 `append` 只追加；`replace` 会用远端列表替换本地 `models`
 6. 非 dry-run 模式下创建 `backups/` 目录并原子写入备份
+
+多个 provider 会相互独立同步。某个 provider 因限流或网络问题失败时，插件会保留它原有的模型配置，同时仍写入其他成功 provider 的变更，避免单个 `429` 阻塞全部同步。
 
 `modelSync.mode` 可选值：
 
@@ -114,6 +118,7 @@ node --test test/model-sync.test.mjs
 
 - 检查 `apiKey` 对应环境变量是否存在
 - 检查 `{env:XXX}` 拼写
+- 如果服务要求 `x-api-key`，在 provider 中配置 `options.headers.x-api-key`；插件会把 `options.headers` 合并到 `/models` 请求
 - 如果你已经在 OpenCode 里认证过 provider，确认对应凭据确实保存在 OpenCode 当前默认本地 `auth.json` 且类型是 `api`
 
 ### 3) 出现 `/v1/v1/models` 或 `/v1models`
@@ -140,7 +145,7 @@ node --test test/model-sync.test.mjs
 - 插件不会上传数据到第三方服务
 - 仅请求你在 provider 里配置的 endpoint
 - 不打印 API key / Authorization 完整值
-- 请求失败、超时、JSON 解析失败时不会写入配置
+- 请求失败、超时、JSON 解析失败时不会改动对应 provider；其他成功 provider 的变更仍可安全写入
 
 ## 风险说明
 

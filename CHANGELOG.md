@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+- Merge `provider.options.headers` into model-list requests, including environment placeholders and custom authentication headers such as `x-api-key`.
+- Persist successful provider updates independently when another provider fails or is rate-limited.
+
 ## [0.1.0] - 2026-04-28
 
 ### Added
