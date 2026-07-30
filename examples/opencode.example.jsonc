@@ -20,6 +20,8 @@
           "enabled": true,
           // Relative endpoint (or absolute URL)
           "endpoint": "/models",
+          // Optional LiteLLM model metadata endpoint (mode, limits, capabilities, costs)
+          "infoEndpoint": "/model/info",
           // Sync mode: "append" keeps local-only models, "replace" mirrors remote models
           "mode": "append",
           // Optional include regex (null = include all)

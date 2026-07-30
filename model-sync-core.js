@@ -29,6 +29,7 @@ import { pathToFileURL } from 'node:url';
 
 const LOG_PREFIX = '[opencode-model-sync]';
 const DEFAULT_ENDPOINT = '/models';
+const COST_PER_MILLION = 1_000_000;
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_SYNC_MODE = 'append';
 const DUPLICATE_LOAD_KEY = Symbol.for('opencode-model-sync.loaded');
@@ -427,6 +428,99 @@ export function extractModelIds(payload) {
 }
 
 /**
+ * Convert LiteLLM `/model/info` data into OpenCode model configuration.
+ * LiteLLM reports token prices per token, while OpenCode uses prices per
+ * million tokens.
+ *
+ * @param {unknown} payload
+ * @returns {Map<string, Record<string, unknown>>}
+ */
+export function extractModelInfo(payload) {
+  const record = payload && typeof payload === 'object'
+    ? /** @type {Record<string, unknown>} */ (payload)
+    : null;
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(record?.data) ? record.data : Array.isArray(record?.models) ? record.models : [];
+  const result = new Map();
+
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const item = /** @type {Record<string, any>} */ (entry);
+    const info = item.model_info && typeof item.model_info === 'object' ? item.model_info : item;
+    const id = item.model_name ?? item.id ?? info.id ?? info.key ?? item.litellm_params?.model;
+    if (typeof id !== 'string' || !id.trim()) continue;
+
+    /** @type {Record<string, any>} */
+    const model = { name: id.trim() };
+    if (typeof info.mode === 'string' && info.mode) model.mode = info.mode;
+
+    const context = numberValue(info.max_input_tokens ?? info.max_tokens);
+    const output = numberValue(info.max_output_tokens);
+    if (context !== undefined || output !== undefined) {
+      model.limit = {};
+      if (context !== undefined) model.limit.context = context;
+      if (output !== undefined) model.limit.output = output;
+    }
+
+    const flags = {
+      attachment: info.supports_vision,
+      reasoning: info.supports_reasoning,
+      tool_call: info.supports_function_calling,
+      temperature: info.supports_temperature,
+    };
+    for (const [key, value] of Object.entries(flags)) {
+      if (typeof value === 'boolean') model[key] = value;
+    }
+
+    const costs = {
+      input: info.input_cost_per_token,
+      output: info.output_cost_per_token,
+      cache_read: info.cache_read_input_token_cost,
+      cache_write: info.cache_creation_input_token_cost,
+    };
+    for (const [key, value] of Object.entries(costs)) {
+      const cost = numberValue(value);
+      if (cost !== undefined) {
+        model.cost ??= {};
+        model.cost[key] = Number((cost * COST_PER_MILLION).toPrecision(15));
+      }
+    }
+
+    result.set(id.trim(), model);
+  }
+  return result;
+}
+
+/** @param {unknown} value @returns {number|undefined} */
+function numberValue(value) {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+/**
+ * Fill missing fields recursively, so explicitly configured model values win.
+ *
+ * @param {Record<string, any>} target
+ * @param {Record<string, any>} defaults
+ * @returns {Record<string, any>}
+ */
+function applyMissingModelInfo(target, defaults) {
+  const output = { ...target };
+  for (const [key, value] of Object.entries(defaults)) {
+    if (output[key] === undefined) {
+      output[key] = value;
+    } else if (
+      value && typeof value === 'object' && !Array.isArray(value)
+      && output[key] && typeof output[key] === 'object' && !Array.isArray(output[key])
+    ) {
+      output[key] = applyMissingModelInfo(output[key], value);
+    }
+  }
+  return output;
+}
+
+/**
  * @param {string[]} ids
  * @param {string|null|undefined} includeRegex
  * @param {string|null|undefined} excludeRegex
@@ -763,15 +857,29 @@ export async function syncProviderModels(providerName, providerConfig) {
   const extracted = extractModelIds(payload);
   const filtered = filterModelIds(extracted, modelSync.includeRegex ?? null, modelSync.excludeRegex ?? null);
 
+  let modelInfo = new Map();
+  if (typeof modelSync.infoEndpoint === 'string' && modelSync.infoEndpoint.trim()) {
+    try {
+      const infoUrl = buildModelsUrl(options.baseURL, modelSync.infoEndpoint);
+      const infoPayload = await fetchRemoteModels(infoUrl, apiKey, timeoutMs, options.headers);
+      modelInfo = extractModelInfo(infoPayload);
+    } catch (err) {
+      warn(`${providerName}: model info request failed; continuing with model IDs: ${String(err)}`);
+    }
+  }
+
   const localModels = providerConfig.models && typeof providerConfig.models === 'object' ? providerConfig.models : {};
   const localIds = new Set(Object.keys(localModels));
   const added = filtered.filter((id) => !localIds.has(id));
   const remoteIds = new Set(filtered);
   const removed = mode === 'replace' ? [...localIds].filter((id) => !remoteIds.has(id)) : [];
-  const nextModels = Object.fromEntries(filtered.map((id) => [id, { name: id }]));
+  const nextModels = Object.fromEntries(filtered.map((id) => [
+    id,
+    applyMissingModelInfo(mode === 'replace' ? {} : (localModels[id] ?? {}), modelInfo.get(id) ?? { name: id }),
+  ]));
   const changed = mode === 'replace'
     ? JSON.stringify(localModels) !== JSON.stringify(nextModels)
-    : added.length > 0;
+    : filtered.some((id) => JSON.stringify(localModels[id]) !== JSON.stringify(nextModels[id]));
 
   if (!dryRun) {
     if (mode === 'replace') {
@@ -780,8 +888,8 @@ export async function syncProviderModels(providerName, providerConfig) {
       if (!providerConfig.models || typeof providerConfig.models !== 'object') {
         providerConfig.models = {};
       }
-      for (const id of added) {
-        providerConfig.models[id] = { name: id };
+      for (const id of filtered) {
+        providerConfig.models[id] = nextModels[id];
       }
     }
   }

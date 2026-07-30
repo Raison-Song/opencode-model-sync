@@ -11,6 +11,7 @@
 - ✅ 零运行时依赖（仅 Node.js 标准库）
 - ✅ 安全写入（先备份，再原子替换）
 - ✅ 支持 dry-run 与多种返回格式
+- ✅ 可通过 LiteLLM `/v1/model/info` 补全模式、token 限制、能力标志和成本
 
 ## 安装
 
@@ -61,15 +62,30 @@
    - `{ object: "list", data: [...] }`
    - `[...]`
    - `{ models: [...] }`
-5. 按 `modelSync.mode` 同步模型：默认 `append` 只追加；`replace` 会用远端列表替换本地 `models`
-6. 非 dry-run 模式下创建 `backups/` 目录并原子写入备份
+5. 配置 `modelSync.infoEndpoint` 时，额外获取 LiteLLM 模型信息并补全 OpenCode 模型配置
+6. 按 `modelSync.mode` 同步模型：默认 `append` 只追加；`replace` 会用远端列表替换本地 `models`
+7. 非 dry-run 模式下创建 `backups/` 目录并原子写入备份
 
 多个 provider 会相互独立同步。某个 provider 因限流或网络问题失败时，插件会保留它原有的模型配置，同时仍写入其他成功 provider 的变更，避免单个 `429` 阻塞全部同步。
 
 `modelSync.mode` 可选值：
 
-- `append`：默认值。只新增远端存在、本地不存在的模型，不删除本地已有模型。
+- `append`：默认值。新增远端存在、本地不存在的模型，并为已有模型补全缺失信息；不删除本地模型或覆盖手工配置。
 - `replace`：用远端过滤后的模型列表整体替换本地 `provider.<name>.models`，本地独有模型会被删除。
+
+### LiteLLM 模型信息
+
+将 `infoEndpoint` 指向 LiteLLM 的模型信息接口（`baseURL` 已包含 `/v1` 时使用 `/model/info`）：
+
+```jsonc
+"modelSync": {
+  "enabled": true,
+  "endpoint": "/models",
+  "infoEndpoint": "/model/info"
+}
+```
+
+插件会把 `mode`、`max_input_tokens` / `max_output_tokens`、vision/reasoning/function calling/temperature 能力，以及 input/output/cache 成本写入对应 OpenCode 模型。LiteLLM 的每 token 成本会转换成 OpenCode 使用的每百万 token 成本。已有的手工配置优先，接口失败时仍会继续同步 `/models` 返回的模型 ID。未配置 `infoEndpoint` 时不会发起额外请求。
 
 插件会保持配置文件原路径写回：原来是 `opencode.json` 就写回 `opencode.json`，原来是 `opencode.jsonc` 就写回 `opencode.jsonc`。对 JSONC 文件会尽量只替换 `models` 区域，以保留其他注释和结构。
 
