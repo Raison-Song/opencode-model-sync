@@ -106,6 +106,53 @@ test('fetchRemoteModels + syncProviderModels with local mock endpoint', async ()
   }
 });
 
+test('syncProviderModels forwards custom provider headers and resolves environment values', async () => {
+  const originalApiKey = process.env.NEWAPI_KEY;
+  process.env.NEWAPI_KEY = 'newapi-secret';
+  let receivedHeaders;
+  const server = http.createServer((req, res) => {
+    receivedHeaders = req.headers;
+    if (req.headers['x-api-key'] === 'newapi-secret') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'authenticated-model' }] }));
+      return;
+    }
+    res.writeHead(401).end();
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+
+  try {
+    const providerConfig = {
+      options: {
+        baseURL: `http://127.0.0.1:${address.port}/v1`,
+        apiKey: 'bearer-secret',
+        headers: {
+          'x-api-key': '{env:NEWAPI_KEY}',
+          Authorization: 'Custom provider-token',
+        },
+        modelSync: { enabled: true },
+      },
+      models: {},
+    };
+
+    const result = await syncProviderModels('newapi', providerConfig);
+
+    assert.deepEqual(result.added, ['authenticated-model']);
+    assert.equal(receivedHeaders['x-api-key'], 'newapi-secret');
+    assert.equal(receivedHeaders.authorization, 'Custom provider-token');
+  } finally {
+    if (originalApiKey === undefined) {
+      delete process.env.NEWAPI_KEY;
+    } else {
+      process.env.NEWAPI_KEY = originalApiKey;
+    }
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('syncProviderModels can replace local models from the remote list', async () => {
   const server = http.createServer((req, res) => {
     if (req.url === '/v1/models') {
@@ -210,6 +257,58 @@ test('ModelSyncPlugin reads opencode.jsonc and preserves comments while writing 
 
     const parsed = parseJsoncConfig(raw);
     assert.deepEqual(Object.keys(parsed.provider.mock.models).sort(), ['local-a', 'remote-a']);
+  } finally {
+    if (originalConfig === undefined) {
+      delete process.env.OPENCODE_CONFIG;
+    } else {
+      process.env.OPENCODE_CONFIG = originalConfig;
+    }
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('ModelSyncPlugin writes successful providers when another provider is rate-limited', async (t) => {
+  delete globalThis[__internal.DUPLICATE_LOAD_KEY];
+  t.after(() => {
+    delete globalThis[__internal.DUPLICATE_LOAD_KEY];
+  });
+
+  const server = http.createServer((req, res) => {
+    if (req.url === '/working/models') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'new-model' }] }));
+      return;
+    }
+    res.writeHead(429, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'rate limited' }));
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'partial-sync-test-'));
+  const configPath = path.join(dir, 'opencode.json');
+  const baseURL = `http://127.0.0.1:${address.port}`;
+  await fs.writeFile(configPath, JSON.stringify({
+    provider: {
+      newapi: {
+        options: { baseURL, modelSync: { enabled: true, endpoint: '/working/models' } },
+        models: {},
+      },
+      mingie: {
+        options: { baseURL, modelSync: { enabled: true, endpoint: '/limited/models' } },
+        models: { 'existing-model': { name: 'existing-model' } },
+      },
+    },
+  }, null, 2));
+
+  const originalConfig = process.env.OPENCODE_CONFIG;
+  process.env.OPENCODE_CONFIG = configPath;
+  try {
+    await ModelSyncPlugin({});
+    const updated = JSON.parse(await fs.readFile(configPath, 'utf8'));
+    assert.deepEqual(updated.provider.newapi.models, { 'new-model': { name: 'new-model' } });
+    assert.deepEqual(updated.provider.mingie.models, { 'existing-model': { name: 'existing-model' } });
   } finally {
     if (originalConfig === undefined) {
       delete process.env.OPENCODE_CONFIG;
