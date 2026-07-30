@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+- Optionally enrich synchronized models from a LiteLLM-compatible `/model/info` endpoint with mode, token limits, capability flags, and per-million-token costs ([#5](https://github.com/Raison-Song/opencode-model-sync/issues/5)).
+
 ### Fixed
 - Merge `provider.options.headers` into model-list requests, including environment placeholders and custom authentication headers such as `x-api-key`.
 - Persist successful provider updates independently when another provider fails or is rate-limited.
